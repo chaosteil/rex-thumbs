@@ -11,13 +11,10 @@ rex-thumbs ports [tmux-thumbs](https://github.com/fcsonline/tmux-thumbs) by
 Ferran Basora to Rex. The idea, the hint style, and the default alphabet come
 from tmux-thumbs. Thank you!
 
-```
-$ git log --oneline -1
-dc56335 fix(api): retry the upload              <- "d" copies 5c56335
-$ cat svar/log/app.log                          <- "s" copies /var/log/app.log
-error: see attps://example.com/docs/errors#42   <- "a" copies the URL
-                                                   "A" also pastes it
-```
+![The picker over a Rex pane: each git hash, path, URL, UUID, and jj change ID has a yellow hint letter](assets/screenshot.png)
+
+In this picture, <kbd>w</kbd> copies `src/upload/retry.rs:42:17`, and
+<kbd>Shift</kbd>+<kbd>W</kbd> also pastes it at the prompt.
 
 ## Install
 
