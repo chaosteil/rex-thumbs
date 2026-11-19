@@ -177,18 +177,81 @@ function M.hints(n, alphabet)
   return out
 end
 
--- The marks of a screen, as { row, start, end, text, hint } tables. Each
+-- Each row as its own group. See M.join.
+local function single(rows)
+  local groups = {}
+  for k, row in ipairs(rows) do groups[k] = { text = row, rows = { k }, at = { 1 } } end
+  return groups
+end
+
+-- Put the rows of the screen into groups, one group for each line that
+-- the program wrote. rows are the rows on the screen. lines are the same
+-- text with the wrapped rows joined; the end of the text is enough.
+-- A group is { text, rows, at }: the joined line, the numbers of its rows,
+-- and the byte in text where each row starts. The first group can start
+-- above the screen: then at[1] is more than 1. If rows and lines do not
+-- agree, each row is its own group.
+function M.join(rows, lines)
+  local groups, r, l = {}, #rows, #lines
+  while r >= 1 do
+    local line = lines[l]
+    if not line then return single(rows) end
+    local text, k = "", r
+    repeat
+      text = rows[k] .. text
+      k = k - 1
+    until k < 1 or #text >= #line
+    local cut = k < 1 and #text > 0 and #text < #line and line:sub(-#text) == text
+    if text ~= line and not cut then return single(rows) end
+    local g = { text = line, rows = {}, at = {} }
+    local at = #line - #text + 1
+    for n = k + 1, r do
+      g.rows[#g.rows + 1] = n
+      g.at[#g.at + 1] = at
+      at = at + #rows[n]
+    end
+    table.insert(groups, 1, g)
+    r, l = k, l - 1
+  end
+  return groups
+end
+
+-- The parts of each mark on the screen, as { row, start, end, mark, first }
+-- tables. start and end are bytes in the row. first is true for the first
+-- part of a mark, which gets the hint.
+function M.spans(groups, marks)
+  local out = {}
+  for _, m in ipairs(marks) do
+    local g, first = groups[m[1]], true
+    for k, row in ipairs(g.rows) do
+      local a = g.at[k]
+      local b = (g.at[k + 1] or #g.text + 1) - 1
+      local s, e = math.max(m[2], a), math.min(m[3], b)
+      if s <= e then
+        out[#out + 1] = { row, s - a + 1, e - a + 1, m, first }
+        first = false
+      end
+    end
+  end
+  return out
+end
+
+-- The marks of a screen, as { line, start, end, text, hint } tables. Each
 -- different text gets one hint. The lines near the bottom get the short
--- hints, because the newest output is there.
-function M.assign(lines, patterns, alphabet)
+-- hints, because the newest output is there. from[line], if set, is the
+-- first byte of the line on the screen. A match that ends before it gets
+-- no mark.
+function M.assign(lines, patterns, alphabet, from)
   local marks, order, seen = {}, {}, {}
   for row = #lines, 1, -1 do
     for _, m in ipairs(M.find(lines[row], patterns)) do
-      local text = lines[row]:sub(m[1], m[2])
-      marks[#marks + 1] = { row, m[1], m[2], text }
-      if not seen[text] then
-        seen[text] = true
-        order[#order + 1] = text
+      if m[2] >= (from and from[row] or 1) then
+        local text = lines[row]:sub(m[1], m[2])
+        marks[#marks + 1] = { row, m[1], m[2], text }
+        if not seen[text] then
+          seen[text] = true
+          order[#order + 1] = text
+        end
       end
     end
   end

@@ -64,5 +64,42 @@ for _, m in ipairs(marks) do by_text[m[4]] = m[5] end
 eq("same text same hint, bottom first", by_text["/a/b"] .. by_text["/c/d"], "as")
 eq("one mark for each match", #marks, 3)
 
+-- A path that wraps from row 2 to row 3, in a 10-column screen.
+local rows = { "ok /a/b", "see src/ve", "ry/long.rs", " done" }
+local groups = M.join(rows, { "old", "ok /a/b", "see src/very/long.rs done" })
+eq("one group for each line", #groups, 2)
+eq("wrapped rows join", table.concat(groups[2].rows, ","), "2,3,4")
+eq("where each row starts", table.concat(groups[2].at, ","), "1,11,21")
+
+local texts_of = {}
+for k, g in ipairs(groups) do texts_of[k] = g.text end
+marks = M.assign(texts_of)
+local wrapped
+for _, m in ipairs(marks) do
+  if m[1] == 2 then wrapped = m end
+end
+eq("a match that wraps copies all of its text", wrapped[4], "src/very/long.rs")
+local parts = {}
+for _, p in ipairs(M.spans(groups, { wrapped })) do
+  parts[#parts + 1] = ("%d:%d-%d:%s"):format(p[1], p[2], p[3], tostring(p[5]))
+end
+eq("a match that wraps shows on each row", table.concat(parts, " "), "2:5-10:true 3:1-10:false")
+
+-- The start of the line is above the screen.
+groups = M.join({ "ng.rs done", "x" }, { "see src/very/long.rs done", "x" })
+eq("a line cut at the top", groups[1].at[1], 16)
+marks = M.assign({ groups[1].text, groups[2].text }, nil, nil, { groups[1].at[1], 1 })
+eq("a cut match copies all of its text", marks[1] and marks[1][4], "src/very/long.rs")
+parts = {}
+for _, p in ipairs(M.spans(groups, marks)) do
+  parts[#parts + 1] = ("%d:%d-%d:%s"):format(p[1], p[2], p[3], tostring(p[5]))
+end
+eq("a cut match has its hint on the screen", table.concat(parts, " "), "1:1-5:true")
+marks = M.assign({ "/a/b see", "x" }, nil, nil, { 6, 1 })
+eq("no mark for a match above the screen", #marks, 0)
+
+groups = M.join({ "a", "b" }, { "a", "c" })
+eq("rows that do not agree stay one group each", #groups .. groups[2].text, "2b")
+
 print(("%d passed, %d failed"):format(passed, failed))
 if failed > 0 then rex.stop(1) end

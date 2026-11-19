@@ -39,14 +39,12 @@ exit 0]]
 local pickers = {}
 local options = {}
 
--- The lines on a terminal's screen. format has no screen-only option, so
--- read the end of the scrollback and keep the last `rows` lines. format
--- drops blank lines at the bottom, so a cleared screen moves up.
-local function screen_lines(block_id)
-  local size, err = rex.block.call(terminal, "size", { block_id = block_id })
-  if not size then error(err, 0) end
-  local r
-  r, err = rex.block.call(terminal, "format", { block_id = block_id, max_bytes = 65536 })
+-- The last lines of a terminal's text, enough for one screen. With
+-- unwrap, Rex joins the rows that it wrapped, so each line is one line
+-- that the program wrote. format drops blank lines at the bottom.
+local function read_tail(block_id, size, unwrap)
+  local r, err = rex.block.call(terminal, "format",
+    { block_id = block_id, max_bytes = 65536, unwrap = unwrap })
   if not r then error(err, 0) end
   local text = r.content
   if r.id then
@@ -64,34 +62,48 @@ local function screen_lines(block_id)
   end
   local all = {}
   for line in (text .. "\n"):gmatch("(.-)\n") do all[#all + 1] = line end
-  local lines = {}
-  for k = math.max(1, #all - size.rows + 1), #all do lines[#lines + 1] = all[k] end
-  return lines
+  return all
+end
+
+-- The rows on a terminal's screen, and the groups of rows that make one
+-- line (see matcher.join). format has no screen-only option, so keep the
+-- last `rows` rows. A cleared screen moves up.
+local function screen(block_id)
+  local size, err = rex.block.call(terminal, "size", { block_id = block_id })
+  if not size then error(err, 0) end
+  local all = read_tail(block_id, size, false)
+  local rows = {}
+  for k = math.max(1, #all - size.rows + 1), #all do rows[#rows + 1] = all[k] end
+  return rows, matcher.join(rows, read_tail(block_id, size, true))
 end
 
 -- The screen with the hints, as escape sequences. A hint covers the first
--- letters of its text. Hints that don't start with `typed` go dim.
+-- letters of its text. A match that wraps shows on each of its rows.
+-- Hints that don't start with `typed` go dim.
 local function render(st)
   local by_row = {}
-  for _, m in ipairs(st.marks) do
-    by_row[m[1]] = by_row[m[1]] or {}
-    table.insert(by_row[m[1]], m)
+  for _, p in ipairs(st.spans) do
+    by_row[p[1]] = by_row[p[1]] or {}
+    table.insert(by_row[p[1]], p)
   end
   local out = { "\27[?25l\27[?7l\27[H\27[2J" }
   for row, line in ipairs(st.lines) do
     out[#out + 1] = "\27[" .. row .. ";1H"
-    local marks = by_row[row] or {}
-    table.sort(marks, function(a, b) return a[2] < b[2] end)
+    local spans = by_row[row] or {}
+    table.sort(spans, function(a, b) return a[2] < b[2] end)
     local col = 1
-    for _, m in ipairs(marks) do
-      out[#out + 1] = DIM .. line:sub(col, m[2] - 1)
-      if m[5]:sub(1, #st.typed) == st.typed then
-        local rest = m[5]:sub(#st.typed + 1)
-        out[#out + 1] = HINT .. rest .. MATCH .. line:sub(m[2] + #rest, m[3])
+    for _, p in ipairs(spans) do
+      local hint = p[4][5]
+      out[#out + 1] = DIM .. line:sub(col, p[2] - 1)
+      if hint:sub(1, #st.typed) ~= st.typed then
+        out[#out + 1] = DIM .. line:sub(p[2], p[3])
+      elseif p[5] then
+        local rest = hint:sub(#st.typed + 1)
+        out[#out + 1] = HINT .. rest .. MATCH .. line:sub(p[2] + #rest, p[3])
       else
-        out[#out + 1] = DIM .. line:sub(m[2], m[3])
+        out[#out + 1] = MATCH .. line:sub(p[2], p[3])
       end
-      col = m[3] + 1
+      col = p[3] + 1
     end
     out[#out + 1] = DIM .. line:sub(col) .. RESET
   end
@@ -169,11 +181,16 @@ local function open(ctx)
     rex.block.call(terminal, "write", { block_id = pane, data = "\27" })
     return nil
   end
-  local lines = screen_lines(pane)
-  local marks = matcher.assign(lines, options.patterns, options.alphabet)
+  local rows, groups = screen(pane)
+  local texts, from = {}, {}
+  for k, g in ipairs(groups) do texts[k], from[k] = g.text, g.at[1] end
+  local marks = matcher.assign(texts, options.patterns, options.alphabet, from)
   if #marks == 0 then return { matches = 0 } end
 
-  local st = { pane = pane, lines = lines, marks = marks, typed = "", frame = os.tmpname() }
+  local st = {
+    pane = pane, lines = rows, marks = marks, spans = matcher.spans(groups, marks),
+    typed = "", frame = os.tmpname(),
+  }
   write_file(st.frame, render(st))
   local w, err = rex.session.new_window{
     window_label = "thumbs",
